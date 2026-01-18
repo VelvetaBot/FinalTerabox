@@ -1,4 +1,4 @@
-# bot.py - Google Drive Downloader Bot
+# bot.py - Google Drive Downloader Bot (API-Free Method)
 
 import os
 import logging
@@ -30,27 +30,26 @@ Download files from Google Drive links! 🚀
 
 **How to use:**
 1️⃣ Send a Google Drive link 🔗
-2️⃣ Click Download button 📥
-3️⃣ Get your file! ✅
+2️⃣ Wait for processing ⏳
+3️⃣ Click Download button 📥
+4️⃣ Get your file! ✅
 
-**Supported links:**
-• drive.google.com/file/d/...
-• drive.google.com/open?id=...
-• docs.google.com/...
+**Supported link formats:**
+• drive.google.com/file/d/xxx
+• drive.google.com/open?id=xxx
 
 **Features:**
-✅ Works with all public files
-✅ Up to 2GB file size
-✅ Fast downloads
+✅ All public files
+✅ Up to 2GB
+✅ Fast & reliable
 ✅ Progress tracking
-✅ All file types supported
+✅ All file types
 
-**⚠️ Note:**
+**⚠️ Requirements:**
 • File must be public or "Anyone with link"
-• Private files won't work
-• Max size: 2GB (Telegram limit)
+• File size under 2GB
 
-💡 Just send any Google Drive share link!
+💡 Just paste your Google Drive link!
 """
     
     keyboard = [[InlineKeyboardButton("📢 Join Update Channel", url=f"https://t.me/{CHANNEL_USERNAME[1:]}")]]
@@ -59,7 +58,7 @@ Download files from Google Drive links! 🚀
     await update.message.reply_text(welcome_text, reply_markup=reply_markup, parse_mode='Markdown')
 
 def extract_file_id(url):
-    """Extract Google Drive file ID from URL"""
+    """Extract Google Drive file ID"""
     patterns = [
         r'/file/d/([a-zA-Z0-9_-]+)',
         r'id=([a-zA-Z0-9_-]+)',
@@ -74,64 +73,76 @@ def extract_file_id(url):
     return None
 
 def is_gdrive_link(url):
-    """Check if URL is a Google Drive link"""
-    gdrive_domains = ['drive.google.com', 'docs.google.com']
-    return any(domain in url.lower() for domain in gdrive_domains)
+    """Check if URL is Google Drive"""
+    return 'drive.google.com' in url.lower() or 'docs.google.com' in url.lower()
 
-async def get_gdrive_file_info(file_id):
-    """Get file info from Google Drive"""
+async def get_file_info_from_page(file_id):
+    """Get file info by scraping the page"""
     try:
-        # Use Google Drive API v3 (public endpoint)
-        api_url = f"https://www.googleapis.com/drive/v3/files/{file_id}?fields=id,name,mimeType,size,webContentLink&key=AIzaSyDRN1d1Gx0p6_aHQQYYZ9Uf5-KVUvE5b9M"
+        url = f"https://drive.google.com/file/d/{file_id}/view"
         
         async with aiohttp.ClientSession() as session:
-            async with session.get(api_url, timeout=30) as response:
-                if response.status == 200:
-                    return await response.json()
-                elif response.status == 404:
-                    return {'error': 'not_found'}
-                elif response.status == 403:
-                    return {'error': 'permission_denied'}
-                else:
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
+            }
+            
+            async with session.get(url, headers=headers, timeout=30) as response:
+                if response.status != 200:
                     return None
+                
+                html = await response.text()
+                
+                # Extract file name
+                file_name = 'Unknown'
+                name_match = re.search(r'"title":"([^"]+)"', html)
+                if name_match:
+                    file_name = name_match.group(1)
+                
+                # Extract file size
+                file_size = 0
+                size_match = re.search(r'"sizeBytes":"(\d+)"', html)
+                if size_match:
+                    file_size = int(size_match.group(1))
+                
+                # Check if file is accessible
+                if 'Sorry, you can\'t view or download this file at this time' in html:
+                    return {'error': 'quota_exceeded'}
+                
+                if 'This file is in the owner\'s trash' in html:
+                    return {'error': 'in_trash'}
+                
+                return {
+                    'name': file_name,
+                    'size': file_size,
+                    'id': file_id
+                }
+                
     except Exception as e:
-        logger.error(f"Error getting file info: {e}")
+        logger.error(f"Error scraping page: {e}")
         return None
 
-def get_direct_download_link(file_id):
-    """Generate direct download link"""
-    return f"https://drive.google.com/uc?export=download&id={file_id}"
+def get_download_link(file_id):
+    """Get direct download link"""
+    return f"https://drive.usercontent.google.com/download?id={file_id}&export=download&confirm=t"
 
 async def download_file_with_progress(file_id, filename, download_msg, file_title):
-    """Download file with progress bar"""
+    """Download file with progress"""
     try:
-        # For large files, we need to handle confirmation
-        download_url = get_direct_download_link(file_id)
+        download_url = get_download_link(file_id)
         
         async with aiohttp.ClientSession() as session:
-            async with session.get(download_url, allow_redirects=True, timeout=1800) as response:
-                
-                # Check if we need confirmation (large files)
-                if 'accounts.google.com' in str(response.url):
-                    return False
-                
-                content = await response.text()
-                
-                # Check for virus scan warning
-                if 'Google Drive - Virus scan warning' in content or 'download_warning' in content:
-                    # Extract confirmation token
-                    match = re.search(r'confirm=([0-9A-Za-z_]+)', content)
-                    if match:
-                        confirm_token = match.group(1)
-                        download_url = f"https://drive.google.com/uc?export=download&id={file_id}&confirm={confirm_token}"
-                    else:
-                        # Try alternate method
-                        download_url = f"https://drive.usercontent.google.com/download?id={file_id}&export=download&confirm=t"
-                
-            # Now download with the correct URL
-            async with session.get(download_url, allow_redirects=True, timeout=1800) as response:
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+            }
+            
+            async with session.get(download_url, headers=headers, allow_redirects=True, timeout=1800) as response:
                 if response.status != 200:
-                    return False
+                    # Try alternate URL
+                    alternate_url = f"https://drive.google.com/uc?export=download&id={file_id}"
+                    async with session.get(alternate_url, headers=headers, allow_redirects=True, timeout=1800) as alt_response:
+                        if alt_response.status != 200:
+                            return False
+                        response = alt_response
                 
                 total_size = int(response.headers.get('content-length', 0))
                 downloaded = 0
@@ -142,7 +153,6 @@ async def download_file_with_progress(file_id, filename, download_msg, file_titl
                         f.write(chunk)
                         downloaded += len(chunk)
                         
-                        # Update progress every 3MB
                         if downloaded - last_update > 3 * 1024 * 1024:
                             if total_size > 0:
                                 percent = (downloaded / total_size) * 100
@@ -170,9 +180,6 @@ async def download_file_with_progress(file_id, filename, download_msg, file_titl
                 
                 return True
                 
-    except asyncio.TimeoutError:
-        logger.error("Download timeout")
-        return False
     except Exception as e:
         logger.error(f"Download error: {e}")
         return False
@@ -187,8 +194,9 @@ async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_gdrive_link(url):
         await update.message.reply_text(
             "❌ Please send a valid Google Drive link!\n\n"
-            "Example:\n"
-            "https://drive.google.com/file/d/xxx/view"
+            "Examples:\n"
+            "• https://drive.google.com/file/d/xxx/view\n"
+            "• https://drive.google.com/open?id=xxx"
         )
         return
     
@@ -196,8 +204,8 @@ async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     if not file_id:
         await update.message.reply_text(
-            "❌ Could not extract file ID from the link.\n\n"
-            "Please send a valid Google Drive file link."
+            "❌ Could not extract file ID!\n\n"
+            "Make sure you're sending a file link, not a folder."
         )
         return
     
@@ -210,69 +218,54 @@ async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     try:
         # Get file info
-        file_info = await get_gdrive_file_info(file_id)
+        file_info = await get_file_info_from_page(file_id)
         
         if not file_info:
             await processing_msg.edit_text(
                 "❌ **Could not access file**\n\n"
-                "Please check:\n"
-                "• Link is correct\n"
-                "• File is public or 'Anyone with link'\n"
-                "• File exists and not deleted"
+                "**Possible reasons:**\n"
+                "• File is private\n"
+                "• Link is incorrect\n"
+                "• File doesn't exist\n"
+                "• Network issue\n\n"
+                "**Solution:**\n"
+                "• Make file public\n"
+                "• Or set to 'Anyone with link'\n"
+                "• Check link is correct"
             )
             return
         
-        if file_info.get('error') == 'not_found':
+        if file_info.get('error') == 'quota_exceeded':
             await processing_msg.edit_text(
-                "❌ **File not found**\n\n"
-                "The file may have been:\n"
-                "• Deleted\n"
-                "• Moved\n"
-                "• Made private\n\n"
-                "Please check the link and try again."
+                "❌ **Download quota exceeded**\n\n"
+                "This file has too many downloads today.\n\n"
+                "Google limits downloads for popular files.\n"
+                "Try again tomorrow or ask file owner to:\n"
+                "• Make a copy of the file\n"
+                "• Share the new copy"
             )
             return
         
-        if file_info.get('error') == 'permission_denied':
+        if file_info.get('error') == 'in_trash':
             await processing_msg.edit_text(
-                "❌ **Access denied**\n\n"
-                "This file is private.\n\n"
-                "To download:\n"
-                "• Make file public, or\n"
-                "• Set sharing to 'Anyone with link'\n\n"
-                "Then try again."
+                "❌ **File is in trash**\n\n"
+                "The file owner has deleted this file.\n"
+                "It's in their trash folder."
             )
             return
         
-        # Extract file details
         file_name = file_info.get('name', 'Unknown')
-        file_size = int(file_info.get('size', 0))
-        mime_type = file_info.get('mimeType', '')
+        file_size = file_info.get('size', 0)
+        file_size_mb = file_size / (1024 * 1024) if file_size else 0
         
-        # Check if it's a Google Docs file
-        if 'google-apps' in mime_type:
-            await processing_msg.edit_text(
-                "❌ **Google Docs/Sheets/Slides not supported**\n\n"
-                "This is a Google Workspace file.\n\n"
-                "To download:\n"
-                "1. Open the file\n"
-                "2. File → Download as → Choose format\n"
-                "3. Upload to Drive as regular file\n"
-                "4. Share and send that link"
-            )
-            return
-        
-        file_size_mb = file_size / (1024 * 1024)
-        
-        # Check file size
+        # Check size
         if file_size > 2000 * 1024 * 1024:
             await processing_msg.edit_text(
                 f"❌ **File too large**\n\n"
                 f"📁 {file_name}\n"
                 f"📦 Size: {file_size_mb:.1f}MB\n\n"
-                f"Telegram limit: 2GB (2048MB)\n"
-                f"This file: {file_size_mb:.1f}MB\n\n"
-                f"File is too large to send via Telegram."
+                f"Telegram limit: 2GB (2048MB)\n\n"
+                f"This file is too large to send."
             )
             return
         
@@ -281,14 +274,16 @@ async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data['file_name'] = file_name
         context.user_data['file_size'] = file_size
         
-        # Show file info
+        # Show info
         keyboard = [[InlineKeyboardButton("📥 Download File", callback_data='download')]]
         reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        size_text = f"{file_size_mb:.1f}MB" if file_size_mb > 0 else "Unknown"
         
         info_text = (
             f"✅ **File Found!**\n\n"
             f"📁 **Name:** {file_name}\n"
-            f"📦 **Size:** {file_size_mb:.1f}MB\n\n"
+            f"📦 **Size:** {size_text}\n\n"
             f"Click button to download!"
         )
         
@@ -298,21 +293,22 @@ async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.error(f"Error: {e}")
         await processing_msg.edit_text(
             "❌ **An error occurred**\n\n"
-            f"Error: {str(e)[:150]}\n\n"
-            "Please try again."
+            f"Please try again or check if:\n"
+            "• Link is correct\n"
+            "• File is public\n"
+            "• File exists"
         )
 
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle download button"""
+    """Handle download"""
     query = update.callback_query
     await query.answer()
     
     file_id = context.user_data.get('file_id')
     file_name = context.user_data.get('file_name')
-    file_size = context.user_data.get('file_size', 0)
     
     if not file_id:
-        await query.message.reply_text("❌ Session expired. Please send the link again.")
+        await query.message.reply_text("❌ Session expired. Send link again.")
         return
     
     download_msg = await query.message.reply_text(
@@ -328,36 +324,30 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         safe_name = "".join(c for c in file_name if c.isalnum() or c in (' ', '-', '_', '.'))[:100]
         filename = f'downloads/{safe_name}'
         
-        # Download file
         success = await download_file_with_progress(file_id, filename, download_msg, file_name)
         
         if not success or not os.path.exists(filename):
             await download_msg.edit_text(
                 "❌ **Download failed**\n\n"
                 "This can happen when:\n"
+                "• File has download quota exceeded\n"
                 "• File is too large\n"
-                "• Connection timeout\n"
-                "• File permissions changed\n\n"
+                "• Connection timeout\n\n"
                 "Try:\n"
+                "• Tomorrow (quota resets)\n"
                 "• Smaller file\n"
-                "• Fresh link\n"
-                "• Check file is still public"
+                "• Fresh link"
             )
             return
         
         actual_size = os.path.getsize(filename)
         actual_size_mb = actual_size / (1024 * 1024)
         
-        if actual_size < 100:  # Less than 100 bytes
-            await download_msg.edit_text(
-                "❌ **Download failed**\n\n"
-                "File appears to be corrupted or empty.\n"
-                "Please check the file and try again."
-            )
+        if actual_size < 100:
+            await download_msg.edit_text("❌ Download failed - file corrupted.")
             os.remove(filename)
             return
         
-        # Upload to Telegram
         await download_msg.edit_text(
             f"⬆️ **Uploading to Telegram...**\n\n"
             f"📁 {file_name[:40]}...\n"
@@ -368,11 +358,10 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         caption = f"✅ **Downloaded via @Velveta_YT_Downloader_bot**\n\n📁 {file_name}"
         
-        # Detect file type
         file_ext = file_name.lower().split('.')[-1] if '.' in file_name else ''
         
         with open(filename, 'rb') as f:
-            if file_ext in ['mp4', 'mkv', 'avi', 'mov', 'webm', 'flv']:
+            if file_ext in ['mp4', 'mkv', 'avi', 'mov', 'webm']:
                 sent_msg = await context.bot.send_video(
                     chat_id=query.message.chat_id,
                     video=f,
@@ -382,7 +371,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     read_timeout=600,
                     write_timeout=600
                 )
-            elif file_ext in ['mp3', 'm4a', 'wav', 'flac', 'ogg', 'aac']:
+            elif file_ext in ['mp3', 'm4a', 'wav', 'flac']:
                 sent_msg = await context.bot.send_audio(
                     chat_id=query.message.chat_id,
                     audio=f,
@@ -391,7 +380,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     read_timeout=600,
                     write_timeout=600
                 )
-            elif file_ext in ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp']:
+            elif file_ext in ['jpg', 'jpeg', 'png', 'gif']:
                 sent_msg = await context.bot.send_photo(
                     chat_id=query.message.chat_id,
                     photo=f,
@@ -423,17 +412,12 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
     except Exception as e:
         logger.error(f"Error: {e}")
-        await download_msg.edit_text(
-            f"❌ **Upload failed**\n\n"
-            f"Error: {str(e)[:150]}\n\n"
-            "File may be too large or corrupted."
-        )
+        await download_msg.edit_text(f"❌ Upload failed: {str(e)[:100]}")
         
     finally:
         if filename and os.path.exists(filename):
             try:
                 os.remove(filename)
-                logger.info(f"Cleaned up: {filename}")
             except:
                 pass
 
@@ -441,7 +425,7 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
     logger.error(f"Error: {context.error}")
 
 async def health_check(request):
-    return web.Response(text="Google Drive Downloader Bot Running! 🚀")
+    return web.Response(text="Google Drive Downloader Running! 🚀")
 
 async def start_web_server():
     app = web.Application()
@@ -452,25 +436,24 @@ async def start_web_server():
     await runner.setup()
     site = web.TCPSite(runner, '0.0.0.0', PORT)
     await site.start()
-    logger.info(f"Web server started on port {PORT}")
+    logger.info(f"Web server: {PORT}")
 
 async def start_bot():
     if not BOT_TOKEN:
-        logger.error("BOT_TOKEN not set!")
+        logger.error("No token!")
         return
     
-    application = Application.builder().token(BOT_TOKEN).build()
+    app = Application.builder().token(BOT_TOKEN).build()
+    app.add_error_handler(error_handler)
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_url))
+    app.add_handler(CallbackQueryHandler(button_callback))
     
-    application.add_error_handler(error_handler)
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_url))
-    application.add_handler(CallbackQueryHandler(button_callback))
+    await app.initialize()
+    await app.start()
+    await app.updater.start_polling(allowed_updates=Update.ALL_TYPES)
     
-    await application.initialize()
-    await application.start()
-    await application.updater.start_polling(allowed_updates=Update.ALL_TYPES)
-    
-    logger.info("Google Drive Downloader Bot Started! 🎉")
+    logger.info("Google Drive Bot Started! 🎉")
     
     while True:
         await asyncio.sleep(1)
