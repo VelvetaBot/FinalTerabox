@@ -68,10 +68,14 @@ def is_terabox_link(url):
         'terabox.com',
         'teraboxapp.com',
         '1024terabox.com',
+        '1024tera.com',
         'terabox.tech',
         'mirrobox.com',
         'nephobox.com',
-        '4funbox.com'
+        '4funbox.com',
+        'freeterabox.com',
+        'terabox.app',
+        'teraboxlink.com'
     ]
     return any(domain in url.lower() for domain in terabox_domains)
 
