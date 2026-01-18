@@ -1,10 +1,4 @@
-import os
-import time
-from pyrogram import Client, filters
-import yt_dlp
-
-# --- 1. YOUR CREDENTIALS ---
-API_ID = # bot.py - TeraBox Downloader Bot
+# bot.py - TeraBox Downloader Bot
 
 import os
 import logging
@@ -47,18 +41,18 @@ Download files from TeraBox links! 🚀
 3️⃣ Get your file! 📥
 
 **Supported links:**
-• terabox.com
-• teraboxapp.com
-• 1024terabox.com
-• terabox.tech
-• mirrobox.com
-• nephobox.com
-• 4funbox.com
+- terabox.com
+- teraboxapp.com
+- 1024terabox.com
+- terabox.tech
+- mirrobox.com
+- nephobox.com
+- 4funbox.com
 
 **⚠️ Note:**
-• Max file size: 2GB (Telegram limit)
-• Large files take time
-• Password-protected files not supported
+- Max file size: 2GB (Telegram limit)
+- Large files take time
+- Password-protected files not supported
 
 💡 Just send the TeraBox link and I'll do the rest!
 """
@@ -108,7 +102,7 @@ async def download_file_with_progress(url, filename, download_msg, file_title):
     """Download file with progress bar"""
     try:
         async with aiohttp.ClientSession() as session:
-            async with session.get(url, timeout=1800) as response:  # 30 min timeout
+            async with session.get(url, timeout=1800) as response:
                 if response.status != 200:
                     return False
                 
@@ -117,18 +111,16 @@ async def download_file_with_progress(url, filename, download_msg, file_title):
                 last_update = 0
                 
                 with open(filename, 'wb') as f:
-                    async for chunk in response.content.iter_chunked(1024 * 512):  # 512KB chunks
+                    async for chunk in response.content.iter_chunked(1024 * 512):
                         f.write(chunk)
                         downloaded += len(chunk)
                         
-                        # Update progress every 5MB
                         if downloaded - last_update > 5 * 1024 * 1024:
                             if total_size > 0:
                                 percent = (downloaded / total_size) * 100
                                 mb_downloaded = downloaded / (1024 * 1024)
                                 mb_total = total_size / (1024 * 1024)
                                 
-                                # Progress bar
                                 bar_length = 20
                                 filled = int(bar_length * percent / 100)
                                 bar = '█' * filled + '░' * (bar_length - filled)
@@ -179,7 +171,6 @@ async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     
     try:
-        # Get file info
         file_info = await get_terabox_info(url)
         
         if not file_info:
@@ -194,7 +185,6 @@ async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
         
-        # Extract file details
         response_data = file_info.get('response', [])
         if not response_data:
             await processing_msg.edit_text("❌ No file found at this link.")
@@ -210,10 +200,9 @@ async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await processing_msg.edit_text("❌ Could not get download link. Link may be expired.")
             return
         
-        # Check file size
         file_size_mb = file_size / (1024 * 1024) if file_size else 0
         
-        if file_size > 2000 * 1024 * 1024:  # 2GB
+        if file_size > 2000 * 1024 * 1024:
             await processing_msg.edit_text(
                 f"❌ **File too large!**\n\n"
                 f"📁 {file_name}\n"
@@ -223,12 +212,10 @@ async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
         
-        # Store data
         context.user_data['file_name'] = file_name
         context.user_data['file_size'] = file_size
         context.user_data['download_url'] = download_url
         
-        # Show file info with download button
         keyboard = [[InlineKeyboardButton("📥 Download File", callback_data='download')]]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
@@ -269,14 +256,11 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     filename = None
     
     try:
-        # Create downloads directory
         os.makedirs('downloads', exist_ok=True)
         
-        # Clean filename
         safe_name = "".join(c for c in file_name if c.isalnum() or c in (' ', '-', '_', '.'))[:100]
         filename = f'downloads/{safe_name}'
         
-        # Download file
         success = await download_file_with_progress(download_url, filename, download_msg, file_name)
         
         if not success or not os.path.exists(filename):
@@ -290,16 +274,14 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
         
-        # Verify file size
         actual_size = os.path.getsize(filename)
         actual_size_mb = actual_size / (1024 * 1024)
         
-        if actual_size < 1024:  # Less than 1KB
+        if actual_size < 1024:
             await download_msg.edit_text("❌ Download failed - invalid file.")
             os.remove(filename)
             return
         
-        # Upload to Telegram
         await download_msg.edit_text(
             f"⬆️ **Uploading to Telegram...**\n\n"
             f"📁 {file_name[:40]}...\n"
@@ -310,7 +292,6 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         caption = f"✅ **Downloaded via @Velveta_YT_Downloader_bot**\n\n📁 {file_name}"
         
-        # Detect file type and send accordingly
         file_ext = file_name.lower().split('.')[-1] if '.' in file_name else ''
         
         with open(filename, 'rb') as f:
@@ -352,10 +333,8 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     write_timeout=600
                 )
         
-        # Delete download progress message
         await download_msg.delete()
         
-        # Send completion message with donation button
         keyboard = [[InlineKeyboardButton("☕ Donate / Support", url="https://t.me/Velvetabots")]]
         await context.bot.send_message(
             chat_id=query.message.chat_id,
@@ -374,7 +353,6 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         
     finally:
-        # Clean up
         if filename and os.path.exists(filename):
             try:
                 os.remove(filename)
@@ -383,15 +361,12 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 pass
 
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
-    """Handle errors"""
     logger.error(f"Error: {context.error}")
 
 async def health_check(request):
-    """Health check endpoint"""
     return web.Response(text="TeraBox Downloader Bot Running! 🚀")
 
 async def start_web_server():
-    """Start web server"""
     app = web.Application()
     app.router.add_get('/', health_check)
     app.router.add_get('/health', health_check)
@@ -403,20 +378,17 @@ async def start_web_server():
     logger.info(f"Web server started on port {PORT}")
 
 async def start_bot():
-    """Start bot"""
     if not BOT_TOKEN:
         logger.error("BOT_TOKEN not set!")
         return
     
     application = Application.builder().token(BOT_TOKEN).build()
     
-    # Add handlers
     application.add_error_handler(error_handler)
     application.add_handler(CommandHandler("start", start))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_url))
     application.add_handler(CallbackQueryHandler(button_callback))
     
-    # Start bot
     await application.initialize()
     await application.start()
     await application.updater.start_polling(allowed_updates=Update.ALL_TYPES)
@@ -427,83 +399,7 @@ async def start_bot():
         await asyncio.sleep(1)
 
 async def main():
-    """Main function"""
     await asyncio.gather(start_web_server(), start_bot())
 
 if __name__ == '__main__':
-    asyncio.run(main())11253846  
-API_HASH = "8db4eb50f557faa9a5756e64fb74a51a"
-BOT_TOKEN = "8381012379:AAEbWjkDUBHj9dHGxq-URPmjGdgVpXH7jlY"
-
-app = Client("LocalTeraboxBot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
-
-# --- 2. HELPER: FIX LINKS ---
-def fix_link(url):
-    # Fix common redirect domains
-    if "1024tera" in url: url = url.replace("1024tera.com", "terabox.com")
-    if "mirrobox" in url: url = url.replace("mirrobox.com", "terabox.com")
-    if "teraboxapp" in url: url = url.replace("teraboxapp.com", "terabox.com")
-    return url
-
-# --- 3. DOWNLOADER LOGIC ---
-def download_video(url, message):
-    message.reply_text("⏳ **Stealing Login from Chrome...**\n(Make sure Chrome is CLOSED!)")
-    
-    clean_url = fix_link(url)
-    
-    ydl_opts = {
-        'outtmpl': 'downloads/%(title)s.%(ext)s',
-        'format': 'best',
-        'noplaylist': True,
-        
-        # 🔥 THE SUPER POWER 🔥
-        # This tells Python to open your Chrome data and take the login directly.
-        'cookiesfrombrowser': ('chrome',), 
-        
-        'nocheckcertificate': True,
-        'ignoreerrors': True,
-        'quiet': True,
-    }
-
-    try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(clean_url, download=True)
-            if not info:
-                message.reply_text("❌ **Failed.** Could not find video.")
-                return
-            
-            file_path = ydl.prepare_filename(info)
-
-        message.reply_text("⬆️ **Uploading...**")
-        app.send_video(
-            chat_id=message.chat.id,
-            video=file_path,
-            caption=f"✅ **Downloaded!**\n🔗 {clean_url}"
-        )
-        
-        os.remove(file_path)
-
-    except Exception as e:
-        error = str(e)
-        if "open" in error.lower() or "lock" in error.lower():
-            message.reply_text("❌ **Error: Chrome is Open!**\nPlease close Google Chrome completely and try again.")
-        elif "cookie" in error.lower():
-             message.reply_text("❌ **Cookie Error.**\nMake sure you are logged into Terabox on Chrome.")
-        else:
-            message.reply_text(f"❌ **Error:** {error}")
-
-# --- 4. BOT COMMANDS ---
-@app.on_message(filters.command("start"))
-def start(client, message):
-    message.reply_text("💻 **Auto-Login Bot Ready!**\n1. Close Chrome.\n2. Send Link.")
-
-@app.on_message(filters.text & filters.private & ~filters.me)
-def handle_msg(client, message):
-    if "http" in message.text:
-        download_video(message.text, message)
-
-if __name__ == "__main__":
-    if not os.path.exists("downloads"):
-        os.makedirs("downloads")
-    print("✅ Bot is running...")
-    app.run()
+    asyncio.run(main())
