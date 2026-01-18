@@ -1,4 +1,4 @@
-# bot.py - TeraBox Downloader Bot
+# bot.py - TeraBox Downloader Bot with Direct Method
 
 import os
 import logging
@@ -9,6 +9,7 @@ import asyncio
 from aiohttp import web
 import aiohttp
 import re
+import json
 
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -20,13 +21,6 @@ BOT_TOKEN = os.environ.get('BOT_TOKEN')
 CHANNEL_USERNAME = "@Velvetabots"
 PORT = int(os.environ.get('PORT', 10000))
 
-# TeraBox API endpoints (multiple for fallback)
-TERABOX_APIS = [
-    "https://terabox-dl.qtcloud.workers.dev/api/get-info",
-    "https://teraboxdownloader.online/api/get-info",
-    "https://api-terabox.hnn.workers.dev/api/get-info"
-]
-
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Send welcome message"""
     welcome_text = """
@@ -37,24 +31,22 @@ Download files from TeraBox links! 🚀
 
 **How to use:**
 1️⃣ Send a TeraBox link 🔗
-2️⃣ Wait for processing ⏳
-3️⃣ Get your file! 📥
+2️⃣ Click Download button 📥
+3️⃣ Get your file! ✅
 
 **Supported links:**
-- terabox.com
-- teraboxapp.com
-- 1024terabox.com
-- terabox.tech
-- mirrobox.com
-- nephobox.com
-- 4funbox.com
+• terabox.com
+• 1024tera.com
+• 1024terabox.com
+• freeterabox.com
+• And more TeraBox domains
 
-**⚠️ Note:**
-- Max file size: 2GB (Telegram limit)
-- Large files take time
-- Password-protected files not supported
+**⚠️ Important:**
+• Max file size: 2GB
+• Large files take time
+• Some links may not work
 
-💡 Just send the TeraBox link and I'll do the rest!
+💡 Just send the TeraBox share link!
 """
     
     keyboard = [[InlineKeyboardButton("📢 Join Update Channel", url=f"https://t.me/{CHANNEL_USERNAME[1:]}")]]
@@ -66,9 +58,9 @@ def is_terabox_link(url):
     """Check if URL is a TeraBox link"""
     terabox_domains = [
         'terabox.com',
+        '1024tera.com',
         'teraboxapp.com',
         '1024terabox.com',
-        '1024tera.com',
         'terabox.tech',
         'mirrobox.com',
         'nephobox.com',
@@ -79,26 +71,73 @@ def is_terabox_link(url):
     ]
     return any(domain in url.lower() for domain in terabox_domains)
 
-async def get_terabox_info(url):
-    """Get file info from TeraBox with fallback APIs"""
-    for api_url in TERABOX_APIS:
-        try:
-            logger.info(f"Trying API: {api_url}")
+def extract_surl(url):
+    """Extract surl parameter from TeraBox link"""
+    # Try different patterns
+    patterns = [
+        r'surl=([^&\s]+)',
+        r'/s/1([^&\s]+)',
+        r'/sharing/link\?surl=([^&\s]+)',
+    ]
+    
+    for pattern in patterns:
+        match = re.search(pattern, url)
+        if match:
+            return match.group(1)
+    return None
+
+async def get_terabox_file_info(url):
+    """Get file info using multiple methods"""
+    try:
+        # Method 1: Try with teraboxvideodownloader API
+        async with aiohttp.ClientSession() as session:
+            api_url = "https://teraboxvideodownloader.nephobox.com/api/video/info"
             
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                'Content-Type': 'application/json',
+            }
+            
+            data = {'url': url}
+            
+            async with session.post(api_url, json=data, headers=headers, timeout=30) as response:
+                if response.status == 200:
+                    result = await response.json()
+                    if result.get('status') == 'success':
+                        return result
+        
+        # Method 2: Try with another API
+        async with aiohttp.ClientSession() as session:
+            api_url = "https://ytshorts.savetube.me/api/v1/terabox-downloader"
+            
+            data = {'url': url}
+            
+            async with session.post(api_url, json=data, timeout=30) as response:
+                if response.status == 200:
+                    result = await response.json()
+                    if result.get('response'):
+                        return result
+        
+        # Method 3: Direct TeraBox API call
+        surl = extract_surl(url)
+        if surl:
             async with aiohttp.ClientSession() as session:
-                data = {'url': url}
+                # Try to get file list directly from TeraBox
+                api_url = f"https://www.terabox.com/share/list?shorturl={surl}&root=1"
                 
-                async with session.post(api_url, json=data, timeout=30) as response:
+                headers = {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                    'Accept': 'application/json',
+                }
+                
+                async with session.get(api_url, headers=headers, timeout=30) as response:
                     if response.status == 200:
                         result = await response.json()
-                        
-                        if result.get('ok') or result.get('success'):
-                            logger.info(f"✅ API success: {api_url}")
-                            return result
-                        
-        except Exception as e:
-            logger.warning(f"API {api_url} failed: {e}")
-            continue
+                        if result.get('errno') == 0:
+                            return {'direct': True, 'data': result}
+        
+    except Exception as e:
+        logger.error(f"All methods failed: {e}")
     
     return None
 
@@ -106,7 +145,11 @@ async def download_file_with_progress(url, filename, download_msg, file_title):
     """Download file with progress bar"""
     try:
         async with aiohttp.ClientSession() as session:
-            async with session.get(url, timeout=1800) as response:
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+            }
+            
+            async with session.get(url, headers=headers, timeout=1800) as response:
                 if response.status != 200:
                     return False
                 
@@ -146,9 +189,6 @@ async def download_file_with_progress(url, filename, download_msg, file_title):
                 
                 return True
                 
-    except asyncio.TimeoutError:
-        logger.error("Download timeout")
-        return False
     except Exception as e:
         logger.error(f"Download error: {e}")
         return False
@@ -163,47 +203,82 @@ async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_terabox_link(url):
         await update.message.reply_text(
             "❌ Please send a valid TeraBox link!\n\n"
-            "Supported: terabox.com, teraboxapp.com, 1024terabox.com, etc."
+            "Supported: terabox.com, 1024tera.com, etc."
         )
         return
     
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.TYPING)
     
     processing_msg = await update.message.reply_text(
-        "🔍 **Processing TeraBox link...**\n⏳ Please wait...",
+        "🔍 **Processing TeraBox link...**\n⏳ Please wait, trying multiple methods...",
         parse_mode='Markdown'
     )
     
     try:
-        file_info = await get_terabox_info(url)
+        # Get file info
+        file_info = await get_terabox_file_info(url)
         
         if not file_info:
             await processing_msg.edit_text(
                 "❌ **Could not process this link**\n\n"
-                "**Possible reasons:**\n"
-                "• Invalid link\n"
-                "• Link expired\n"
-                "• Password-protected file\n"
-                "• Server is busy\n\n"
-                "Please check the link and try again."
+                "**This can happen when:**\n"
+                "• Link is expired or invalid\n"
+                "• File is password-protected\n"
+                "• TeraBox servers are blocking requests\n"
+                "• Link format is not supported\n\n"
+                "**💡 Try:**\n"
+                "• Get a fresh share link\n"
+                "• Use a public (non-password) link\n"
+                "• Try a different file\n\n"
+                "**Note:** Due to TeraBox restrictions, some links may not work. "
+                "This is a limitation of TeraBox, not the bot."
             )
             return
         
-        response_data = file_info.get('response', [])
-        if not response_data:
-            await processing_msg.edit_text("❌ No file found at this link.")
-            return
+        # Parse response based on method used
+        if file_info.get('direct'):
+            # Direct TeraBox API response
+            data = file_info['data']
+            file_list = data.get('list', [])
+            
+            if not file_list:
+                await processing_msg.edit_text("❌ No files found in this link.")
+                return
+            
+            file_data = file_list[0]
+            file_name = file_data.get('server_filename', 'Unknown')
+            file_size = file_data.get('size', 0)
+            download_url = file_data.get('dlink', '')
+            
+        elif file_info.get('response'):
+            # API method response
+            response_data = file_info.get('response', [])
+            if isinstance(response_data, list) and response_data:
+                file_data = response_data[0]
+            else:
+                file_data = response_data
+            
+            file_name = file_data.get('filename', file_data.get('file_name', 'Unknown'))
+            file_size = file_data.get('size', file_data.get('file_size', 0))
+            download_url = file_data.get('download_link', file_data.get('direct_link', ''))
         
-        file_data = response_data[0] if isinstance(response_data, list) else response_data
-        
-        file_name = file_data.get('filename', 'Unknown')
-        file_size = file_data.get('size', 0)
-        download_url = file_data.get('download_link') or file_data.get('direct_link')
+        else:
+            # Other API format
+            data = file_info.get('data', {})
+            file_name = data.get('file_name', data.get('title', 'Unknown'))
+            file_size = data.get('file_size', data.get('size', 0))
+            download_url = data.get('download_url', data.get('video_url', ''))
         
         if not download_url:
-            await processing_msg.edit_text("❌ Could not get download link. Link may be expired.")
+            await processing_msg.edit_text(
+                "❌ **Download link not available**\n\n"
+                "TeraBox is blocking direct downloads for this file.\n"
+                "This is a TeraBox restriction, not a bot issue.\n\n"
+                "Try another file or link."
+            )
             return
         
+        # Check file size
         file_size_mb = file_size / (1024 * 1024) if file_size else 0
         
         if file_size > 2000 * 1024 * 1024:
@@ -211,23 +286,28 @@ async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"❌ **File too large!**\n\n"
                 f"📁 {file_name}\n"
                 f"📦 Size: {file_size_mb:.1f}MB\n\n"
-                f"Telegram limit is 2GB (2048MB).\n"
-                f"This file is larger than the limit."
+                f"Telegram limit: 2GB (2048MB)\n"
+                f"This file exceeds the limit."
             )
             return
         
+        # Store data
         context.user_data['file_name'] = file_name
         context.user_data['file_size'] = file_size
         context.user_data['download_url'] = download_url
+        context.user_data['original_url'] = url
         
+        # Show file info
         keyboard = [[InlineKeyboardButton("📥 Download File", callback_data='download')]]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
+        size_text = f"{file_size_mb:.1f}MB" if file_size_mb > 0 else "Unknown"
+        
         info_text = (
-            f"✅ **File Found!**\n\n"
+            f"✅ **File Ready!**\n\n"
             f"📁 **Name:** {file_name}\n"
-            f"📦 **Size:** {file_size_mb:.1f}MB\n\n"
-            f"Click the button below to download!"
+            f"📦 **Size:** {size_text}\n\n"
+            f"Click button to download!"
         )
         
         await processing_msg.edit_text(info_text, reply_markup=reply_markup, parse_mode='Markdown')
@@ -236,7 +316,8 @@ async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.error(f"Error: {e}")
         await processing_msg.edit_text(
             "❌ **An error occurred**\n\n"
-            "Please try again or check if the link is valid."
+            f"Error: {str(e)[:100]}\n\n"
+            "Please try again or use a different link."
         )
 
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -245,7 +326,6 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     
     file_name = context.user_data.get('file_name')
-    file_size = context.user_data.get('file_size', 0)
     download_url = context.user_data.get('download_url')
     
     if not download_url:
@@ -273,8 +353,8 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "Possible reasons:\n"
                 "• Connection timeout\n"
                 "• Link expired\n"
-                "• Server error\n\n"
-                "Please try again."
+                "• TeraBox is blocking downloads\n\n"
+                "Try getting a fresh link from TeraBox."
             )
             return
         
@@ -282,7 +362,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         actual_size_mb = actual_size / (1024 * 1024)
         
         if actual_size < 1024:
-            await download_msg.edit_text("❌ Download failed - invalid file.")
+            await download_msg.edit_text("❌ Download failed - file is corrupted.")
             os.remove(filename)
             return
         
@@ -290,7 +370,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"⬆️ **Uploading to Telegram...**\n\n"
             f"📁 {file_name[:40]}...\n"
             f"📤 Size: {actual_size_mb:.1f}MB\n"
-            f"⏳ This may take a while...",
+            f"⏳ Please wait...",
             parse_mode='Markdown'
         )
         
@@ -299,7 +379,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         file_ext = file_name.lower().split('.')[-1] if '.' in file_name else ''
         
         with open(filename, 'rb') as f:
-            if file_ext in ['mp4', 'mkv', 'avi', 'mov']:
+            if file_ext in ['mp4', 'mkv', 'avi', 'mov', 'webm']:
                 sent_msg = await context.bot.send_video(
                     chat_id=query.message.chat_id,
                     video=f,
@@ -309,7 +389,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     read_timeout=600,
                     write_timeout=600
                 )
-            elif file_ext in ['mp3', 'm4a', 'wav', 'flac']:
+            elif file_ext in ['mp3', 'm4a', 'wav', 'flac', 'ogg']:
                 sent_msg = await context.bot.send_audio(
                     chat_id=query.message.chat_id,
                     audio=f,
@@ -318,7 +398,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     read_timeout=600,
                     write_timeout=600
                 )
-            elif file_ext in ['jpg', 'jpeg', 'png', 'gif']:
+            elif file_ext in ['jpg', 'jpeg', 'png', 'gif', 'webp']:
                 sent_msg = await context.bot.send_photo(
                     chat_id=query.message.chat_id,
                     photo=f,
@@ -353,7 +433,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await download_msg.edit_text(
             f"❌ **Upload failed**\n\n"
             f"Error: {str(e)[:100]}\n\n"
-            "The file may be too large or corrupted."
+            "File may be too large or corrupted."
         )
         
     finally:
