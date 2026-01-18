@@ -1,4 +1,2 @@
-pyrogram
-tgcrypto
-yt-dlp
-aiohttp
+python-telegram-bot==21.0.1
+aiohttp==3.9.1
