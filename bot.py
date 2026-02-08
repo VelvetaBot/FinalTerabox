@@ -1,465 +1,285 @@
-# bot.py - Google Drive Downloader Bot (API-Free Method)
-
 import os
-import logging
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, ContextTypes, filters
-from telegram.constants import ChatAction
+import time
 import asyncio
-from aiohttp import web
-import aiohttp
-import re
+import threading
+import shutil
+import subprocess
+import sys
+import tarfile
+import urllib.request
+import stat
+from flask import Flask
+from pyrogram import Client, filters
+from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo
+from pyrogram.enums import ChatType 
+import yt_dlp
 
-logging.basicConfig(
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.INFO
-)
-logger = logging.getLogger(__name__)
+# --- 0. ADMIN CONFIGURATION ---
+LOG_GROUP_ID = 0  
 
-BOT_TOKEN = os.environ.get('BOT_TOKEN')
-CHANNEL_USERNAME = "@Velvetabots"
-PORT = int(os.environ.get('PORT', 10000))
-
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Send welcome message"""
-    welcome_text = """
-🌟 **Welcome to Velveta Google Drive Downloader!**
-🌟
-
-Download files from Google Drive links! 🚀
-
-**How to use:**
-1️⃣ Send a Google Drive link 🔗
-2️⃣ Wait for processing ⏳
-3️⃣ Click Download button 📥
-4️⃣ Get your file! ✅
-
-**Supported link formats:**
-• drive.google.com/file/d/xxx
-• drive.google.com/open?id=xxx
-
-**Features:**
-✅ All public files
-✅ Up to 2GB
-✅ Fast & reliable
-✅ Progress tracking
-✅ All file types
-
-**⚠️ Requirements:**
-• File must be public or "Anyone with link"
-• File size under 2GB
-
-💡 Just paste your Google Drive link!
-"""
+# --- 1. SETUP ENVIRONMENT ---
+def setup_environment():
+    base_dir = os.getcwd()
+    bin_dir = os.path.join(base_dir, "bin")
+    if not os.path.exists(bin_dir): os.makedirs(bin_dir)
     
-    keyboard = [[InlineKeyboardButton("📢 Join Update Channel", url=f"https://t.me/{CHANNEL_USERNAME[1:]}")]]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    
-    await update.message.reply_text(welcome_text, reply_markup=reply_markup, parse_mode='Markdown')
+    # Node.js
+    node_exe = os.path.join(bin_dir, "node")
+    if not os.path.exists(node_exe):
+        print("⬇️ Downloading Node.js v16...")
+        try:
+            url = "https://nodejs.org/dist/v16.20.0/node-v16.20.0-linux-x64.tar.xz"
+            tar_path = "node.tar.xz"
+            urllib.request.urlretrieve(url, tar_path)
+            with tarfile.open(tar_path) as tar:
+                tar.extractall()
+            for item in os.listdir():
+                if item.startswith("node-v16") and os.path.isdir(item):
+                    shutil.move(os.path.join(item, "bin", "node"), node_exe)
+                    shutil.rmtree(item)
+                    break
+            if os.path.exists(tar_path): os.remove(tar_path)
+            os.chmod(node_exe, 0o755)
+            print("✅ Node.js installed.")
+        except Exception as e:
+            print(f"⚠️ Node install error: {e}")
 
-def extract_file_id(url):
-    """Extract Google Drive file ID"""
-    patterns = [
-        r'/file/d/([a-zA-Z0-9_-]+)',
-        r'id=([a-zA-Z0-9_-]+)',
-        r'/d/([a-zA-Z0-9_-]+)',
-        r'open\?id=([a-zA-Z0-9_-]+)',
-    ]
-    
-    for pattern in patterns:
-        match = re.search(pattern, url)
-        if match:
-            return match.group(1)
-    return None
+    # FFmpeg
+    ffmpeg_exe = os.path.join(bin_dir, "ffmpeg")
+    if not os.path.exists(ffmpeg_exe):
+        print("⬇️ Downloading FFmpeg...")
+        try:
+            url = "https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz"
+            tar_path = "ffmpeg.tar.xz"
+            urllib.request.urlretrieve(url, tar_path)
+            with tarfile.open(tar_path) as tar:
+                tar.extractall()
+            for item in os.listdir():
+                if item.startswith("ffmpeg-") and os.path.isdir(item):
+                    shutil.move(os.path.join(item, "ffmpeg"), ffmpeg_exe)
+                    shutil.rmtree(item)
+                    break
+            if os.path.exists(tar_path): os.remove(tar_path)
+            os.chmod(ffmpeg_exe, 0o755)
+            print("✅ FFmpeg installed.")
+        except Exception as e:
+            print(f"⚠️ FFmpeg install error: {e}")
 
-def is_gdrive_link(url):
-    """Check if URL is Google Drive"""
-    return 'drive.google.com' in url.lower() or 'docs.google.com' in url.lower()
+    os.environ["PATH"] = f"{bin_dir}:{os.environ['PATH']}"
+    return bin_dir
 
-async def get_file_info_from_page(file_id):
-    """Get file info by scraping the page"""
+BIN_DIR = setup_environment()
+
+# --- 2. CONFIGURATION ---
+API_ID = 11253846
+API_HASH = "8db4eb50f557faa9a5756e64fb74a51a"
+BOT_TOKEN = "8161146581:AAFztbSlsW-qGmDRVivmRxtwwtsGnfM1eZY"
+
+# --- 3. FORCE UPDATE YT-DLP (PRE-RELEASE) ---
+try:
+    print("⚙️ Installing yt-dlp Nightly Build...")
+    subprocess.check_call([sys.executable, "-m", "pip", "install", "--force-reinstall", "--pre", "yt-dlp"])
+except:
+    pass
+
+# --- 4. FLASK SERVER ---
+app_web = Flask(__name__)
+
+@app_web.route('/')
+def home(): return "✅ Velveta Pro is Live!"
+
+def run_web():
+    port = int(os.environ.get("PORT", 8080))
+    app_web.run(host="0.0.0.0", port=port)
+
+threading.Thread(target=run_web, daemon=True).start()
+
+# --- 5. TELEGRAM CLIENT ---
+app = Client("velveta_pro", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
+
+# --- 6. HELPER FUNCTIONS ---
+def humanbytes(size):
+    if not size: return "0 B"
+    power = 2**10
+    n = 0
+    dic_powerN = {0: ' ', 1: 'Ki', 2: 'Mi', 3: 'Gi', 4: 'Ti'}
+    while size > power:
+        size /= power
+        n += 1
+    return str(round(size, 2)) + " " + dic_powerN[n] + 'B'
+
+def time_formatter(seconds):
+    return f"{int(seconds//3600):02d}:{int((seconds%3600)//60):02d}:{int(seconds%60):02d}"
+
+async def progress_bar(current, total, status_msg, start_time, title, action_name):
     try:
-        url = f"https://drive.google.com/file/d/{file_id}/view"
-        
-        async with aiohttp.ClientSession() as session:
-            headers = {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
-            }
-            
-            async with session.get(url, headers=headers, timeout=30) as response:
-                if response.status != 200:
-                    return None
-                
-                html = await response.text()
-                
-                # Extract file name
-                file_name = 'Unknown'
-                name_match = re.search(r'"title":"([^"]+)"', html)
-                if name_match:
-                    file_name = name_match.group(1)
-                
-                # Extract file size
-                file_size = 0
-                size_match = re.search(r'"sizeBytes":"(\d+)"', html)
-                if size_match:
-                    file_size = int(size_match.group(1))
-                
-                # Check if file is accessible
-                if 'Sorry, you can\'t view or download this file at this time' in html:
-                    return {'error': 'quota_exceeded'}
-                
-                if 'This file is in the owner\'s trash' in html:
-                    return {'error': 'in_trash'}
-                
-                return {
-                    'name': file_name,
-                    'size': file_size,
-                    'id': file_id
-                }
-                
-    except Exception as e:
-        logger.error(f"Error scraping page: {e}")
-        return None
+        now = time.time()
+        diff = now - start_time
+        if round(diff % 5.00) == 0 or current == total:
+            percentage = current * 100 / total
+            speed = current / diff if diff > 0 else 0
+            eta = round((total - current) / speed) if speed > 0 else 0
+            bar = "██" * int(percentage / 10) + "░░" * (10 - int(percentage / 10))
+            text = f"⬇️ **{action_name}...**\n🎬 **{title}**\n\n📊 **Progress:** {bar} {round(percentage, 2)}%\n⚡ **Speed:** {humanbytes(speed)}/s\n⏳ **ETA:** {time_formatter(eta)}"
+            if status_msg.text != text: await status_msg.edit_text(text)
+    except: pass
 
-def get_download_link(file_id):
-    """Get direct download link"""
-    return f"https://drive.usercontent.google.com/download?id={file_id}&export=download&confirm=t"
+# --- 7. HANDLERS ---
+@app.on_message(filters.command("start"))
+async def start_msg(client, message):
+    if message.chat.type == ChatType.PRIVATE:
+        text = (
+            "🌟 Welcome to Velveta Downloader (Pro)! 🌟\n"
+            "I can download YouTube videos up to 2GB! 🚀\n\n"
+            "How to use:\n"
+            "1️⃣ Send a YouTube link 🔗\n"
+            "2️⃣ Select Quality ✨\n"
+            "3️⃣ Wait for the magic! 📥"
+        )
+        buttons = [[InlineKeyboardButton("📢 Join Update Channel", url="https://t.me/Velvetabots")]]
+        await message.reply_text(text, reply_markup=InlineKeyboardMarkup(buttons))
 
-async def download_file_with_progress(file_id, filename, download_msg, file_title):
-    """Download file with progress"""
+url_store = {}
+
+@app.on_message(filters.text & ~filters.command("start"))
+async def handle_link(client, message):
+    url = message.text
+    if message.chat.type in [ChatType.GROUP, ChatType.SUPERGROUP]:
+        if not any(x in url for x in ["youtube.com", "youtu.be", "shorts"]): return
+    elif not any(x in url for x in ["youtube.com", "youtu.be", "shorts"]):
+        return await message.reply_text("❌ Please send a valid YouTube link.")
+
+    msg = await message.reply_text("🔎 **Fetching Info...**", quote=True)
+    
+    title = "YouTube Video"
+    thumb = None
+    
+    # ATTEMPT: Android Creator (Requires Nightly - Best for bypassing Sign In)
     try:
-        download_url = get_download_link(file_id)
-        
-        async with aiohttp.ClientSession() as session:
-            headers = {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-            }
-            
-            async with session.get(download_url, headers=headers, allow_redirects=True, timeout=1800) as response:
-                if response.status != 200:
-                    # Try alternate URL
-                    alternate_url = f"https://drive.google.com/uc?export=download&id={file_id}"
-                    async with session.get(alternate_url, headers=headers, allow_redirects=True, timeout=1800) as alt_response:
-                        if alt_response.status != 200:
-                            return False
-                        response = alt_response
-                
-                total_size = int(response.headers.get('content-length', 0))
-                downloaded = 0
-                last_update = 0
-                
-                with open(filename, 'wb') as f:
-                    async for chunk in response.content.iter_chunked(1024 * 512):
-                        f.write(chunk)
-                        downloaded += len(chunk)
-                        
-                        if downloaded - last_update > 3 * 1024 * 1024:
-                            if total_size > 0:
-                                percent = (downloaded / total_size) * 100
-                                mb_downloaded = downloaded / (1024 * 1024)
-                                mb_total = total_size / (1024 * 1024)
-                                
-                                bar_length = 20
-                                filled = int(bar_length * percent / 100)
-                                bar = '█' * filled + '░' * (bar_length - filled)
-                                
-                                progress_text = (
-                                    f"⬇️ **Downloading from Google Drive...**\n\n"
-                                    f"📁 {file_title[:40]}...\n\n"
-                                    f"📊 Progress: {percent:.1f}%\n"
-                                    f"{bar}\n"
-                                    f"📥 {mb_downloaded:.1f}MB / {mb_total:.1f}MB"
-                                )
-                                
-                                try:
-                                    await download_msg.edit_text(progress_text, parse_mode='Markdown')
-                                except:
-                                    pass
-                                
-                                last_update = downloaded
-                
-                return True
-                
-    except Exception as e:
-        logger.error(f"Download error: {e}")
-        return False
-
-async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle Google Drive URL"""
-    if not update.message or not update.message.text:
-        return
-    
-    url = update.message.text.strip()
-    
-    if not is_gdrive_link(url):
-        await update.message.reply_text(
-            "❌ Please send a valid Google Drive link!\n\n"
-            "Examples:\n"
-            "• https://drive.google.com/file/d/xxx/view\n"
-            "• https://drive.google.com/open?id=xxx"
-        )
-        return
-    
-    file_id = extract_file_id(url)
-    
-    if not file_id:
-        await update.message.reply_text(
-            "❌ Could not extract file ID!\n\n"
-            "Make sure you're sending a file link, not a folder."
-        )
-        return
-    
-    await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.TYPING)
-    
-    processing_msg = await update.message.reply_text(
-        "🔍 **Checking Google Drive file...**\n⏳ Please wait...",
-        parse_mode='Markdown'
-    )
-    
-    try:
-        # Get file info
-        file_info = await get_file_info_from_page(file_id)
-        
-        if not file_info:
-            await processing_msg.edit_text(
-                "❌ **Could not access file**\n\n"
-                "**Possible reasons:**\n"
-                "• File is private\n"
-                "• Link is incorrect\n"
-                "• File doesn't exist\n"
-                "• Network issue\n\n"
-                "**Solution:**\n"
-                "• Make file public\n"
-                "• Or set to 'Anyone with link'\n"
-                "• Check link is correct"
-            )
-            return
-        
-        if file_info.get('error') == 'quota_exceeded':
-            await processing_msg.edit_text(
-                "❌ **Download quota exceeded**\n\n"
-                "This file has too many downloads today.\n\n"
-                "Google limits downloads for popular files.\n"
-                "Try again tomorrow or ask file owner to:\n"
-                "• Make a copy of the file\n"
-                "• Share the new copy"
-            )
-            return
-        
-        if file_info.get('error') == 'in_trash':
-            await processing_msg.edit_text(
-                "❌ **File is in trash**\n\n"
-                "The file owner has deleted this file.\n"
-                "It's in their trash folder."
-            )
-            return
-        
-        file_name = file_info.get('name', 'Unknown')
-        file_size = file_info.get('size', 0)
-        file_size_mb = file_size / (1024 * 1024) if file_size else 0
-        
-        # Check size
-        if file_size > 2000 * 1024 * 1024:
-            await processing_msg.edit_text(
-                f"❌ **File too large**\n\n"
-                f"📁 {file_name}\n"
-                f"📦 Size: {file_size_mb:.1f}MB\n\n"
-                f"Telegram limit: 2GB (2048MB)\n\n"
-                f"This file is too large to send."
-            )
-            return
-        
-        # Store data
-        context.user_data['file_id'] = file_id
-        context.user_data['file_name'] = file_name
-        context.user_data['file_size'] = file_size
-        
-        # Show info
-        keyboard = [[InlineKeyboardButton("📥 Download File", callback_data='download')]]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        size_text = f"{file_size_mb:.1f}MB" if file_size_mb > 0 else "Unknown"
-        
-        info_text = (
-            f"✅ **File Found!**\n\n"
-            f"📁 **Name:** {file_name}\n"
-            f"📦 **Size:** {size_text}\n\n"
-            f"Click button to download!"
-        )
-        
-        await processing_msg.edit_text(info_text, reply_markup=reply_markup, parse_mode='Markdown')
-        
-    except Exception as e:
-        logger.error(f"Error: {e}")
-        await processing_msg.edit_text(
-            "❌ **An error occurred**\n\n"
-            f"Please try again or check if:\n"
-            "• Link is correct\n"
-            "• File is public\n"
-            "• File exists"
-        )
-
-async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle download"""
-    query = update.callback_query
-    await query.answer()
-    
-    file_id = context.user_data.get('file_id')
-    file_name = context.user_data.get('file_name')
-    
-    if not file_id:
-        await query.message.reply_text("❌ Session expired. Send link again.")
-        return
-    
-    download_msg = await query.message.reply_text(
-        f"⬇️ **Starting download...**\n\n📁 {file_name[:40]}...\n\n⏳ Please wait...",
-        parse_mode='Markdown'
-    )
-    
-    filename = None
-    
-    try:
-        os.makedirs('downloads', exist_ok=True)
-        
-        safe_name = "".join(c for c in file_name if c.isalnum() or c in (' ', '-', '_', '.'))[:100]
-        filename = f'downloads/{safe_name}'
-        
-        success = await download_file_with_progress(file_id, filename, download_msg, file_name)
-        
-        if not success or not os.path.exists(filename):
-            await download_msg.edit_text(
-                "❌ **Download failed**\n\n"
-                "This can happen when:\n"
-                "• File has download quota exceeded\n"
-                "• File is too large\n"
-                "• Connection timeout\n\n"
-                "Try:\n"
-                "• Tomorrow (quota resets)\n"
-                "• Smaller file\n"
-                "• Fresh link"
-            )
-            return
-        
-        actual_size = os.path.getsize(filename)
-        actual_size_mb = actual_size / (1024 * 1024)
-        
-        if actual_size < 100:
-            await download_msg.edit_text("❌ Download failed - file corrupted.")
-            os.remove(filename)
-            return
-        
-        await download_msg.edit_text(
-            f"⬆️ **Uploading to Telegram...**\n\n"
-            f"📁 {file_name[:40]}...\n"
-            f"📤 Size: {actual_size_mb:.1f}MB\n"
-            f"⏳ Please wait...",
-            parse_mode='Markdown'
-        )
-        
-        caption = f"✅ **Downloaded via @Velveta_YT_Downloader_bot**\n\n📁 {file_name}"
-        
-        file_ext = file_name.lower().split('.')[-1] if '.' in file_name else ''
-        
-        with open(filename, 'rb') as f:
-            if file_ext in ['mp4', 'mkv', 'avi', 'mov', 'webm']:
-                sent_msg = await context.bot.send_video(
-                    chat_id=query.message.chat_id,
-                    video=f,
-                    caption=caption,
-                    parse_mode='Markdown',
-                    supports_streaming=True,
-                    read_timeout=600,
-                    write_timeout=600
-                )
-            elif file_ext in ['mp3', 'm4a', 'wav', 'flac']:
-                sent_msg = await context.bot.send_audio(
-                    chat_id=query.message.chat_id,
-                    audio=f,
-                    caption=caption,
-                    parse_mode='Markdown',
-                    read_timeout=600,
-                    write_timeout=600
-                )
-            elif file_ext in ['jpg', 'jpeg', 'png', 'gif']:
-                sent_msg = await context.bot.send_photo(
-                    chat_id=query.message.chat_id,
-                    photo=f,
-                    caption=caption,
-                    parse_mode='Markdown',
-                    read_timeout=600,
-                    write_timeout=600
-                )
-            else:
-                sent_msg = await context.bot.send_document(
-                    chat_id=query.message.chat_id,
-                    document=f,
-                    caption=caption,
-                    parse_mode='Markdown',
-                    read_timeout=600,
-                    write_timeout=600
-                )
-        
-        await download_msg.delete()
-        
-        keyboard = [[InlineKeyboardButton("☕ Donate / Support", url="https://t.me/Velvetabots")]]
-        await context.bot.send_message(
-            chat_id=query.message.chat_id,
-            text="✅ **Download Complete!** 🎉\n\nEnjoy your file!",
-            reply_to_message_id=sent_msg.message_id,
-            reply_markup=InlineKeyboardMarkup(keyboard),
-            parse_mode='Markdown'
-        )
-        
-    except Exception as e:
-        logger.error(f"Error: {e}")
-        await download_msg.edit_text(f"❌ Upload failed: {str(e)[:100]}")
-        
-    finally:
-        if filename and os.path.exists(filename):
+        ydl_opts_info = {
+            'quiet': True, 
+            'check_formats': False,
+            'extractor_args': {'youtube': {'player_client': ['android_creator', 'android']}} 
+        }
+        with yt_dlp.YoutubeDL(ydl_opts_info) as ydl:
             try:
-                os.remove(filename)
-            except:
-                pass
+                info = await asyncio.to_thread(ydl.extract_info, url, download=False)
+                title = info.get('title', 'YouTube Video')
+                thumb = info.get('thumbnail', None)
+            except: pass
+    except Exception as e: print(f"⚠️ Info extraction failed: {e}")
 
-async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
-    logger.error(f"Error: {context.error}")
+    unique_id = f"{message.chat.id}_{message.id}"
+    url_store[unique_id] = {'url': url, 'title': title, 'thumb': thumb, 'msg_id': message.id}
 
-async def health_check(request):
-    return web.Response(text="Google Drive Downloader Running! 🚀")
+    # BUTTONS MATCHING SCREENSHOT EXACTLY
+    buttons = [
+        [InlineKeyboardButton("🚀 4K (Ultra HD)", callback_data=f"2160|{unique_id}"), InlineKeyboardButton("🌟 2K (1440p)", callback_data=f"1440|{unique_id}")],
+        [InlineKeyboardButton("🖥 1080p (Full HD)", callback_data=f"1080|{unique_id}"), InlineKeyboardButton("💻 720p (HD)", callback_data=f"720|{unique_id}")],
+        [InlineKeyboardButton("📺 480p (Clear)", callback_data=f"480|{unique_id}"), InlineKeyboardButton("📱 360p (Best Mobile)", callback_data=f"360|{unique_id}")],
+        [InlineKeyboardButton("📟 240p", callback_data=f"240|{unique_id}"), InlineKeyboardButton("📉 144p (Data Saver)", callback_data=f"warn_144|{unique_id}")],
+        [InlineKeyboardButton("🎵 Audio Only (MP3)", callback_data=f"mp3|{unique_id}")]
+    ]
+    await msg.edit_text(f"🎬 **{title}**\n\n👇 **Select Quality:**", reply_markup=InlineKeyboardMarkup(buttons))
 
-async def start_web_server():
-    app = web.Application()
-    app.router.add_get('/', health_check)
-    app.router.add_get('/health', health_check)
+@app.on_callback_query()
+async def callback(client, query):
+    data = query.data.split("|")
+    action, unique_id = data[0], data[1]
     
-    runner = web.AppRunner(app)
-    await runner.setup()
-    site = web.TCPSite(runner, '0.0.0.0', PORT)
-    await site.start()
-    logger.info(f"Web server: {PORT}")
+    if unique_id not in url_store: return await query.answer("❌ Link Expired.", show_alert=True)
+    meta = url_store[unique_id]
+    original_msg_id = meta.get('msg_id')
 
-async def start_bot():
-    if not BOT_TOKEN:
-        logger.error("No token!")
-        return
-    
-    app = Application.builder().token(BOT_TOKEN).build()
-    app.add_error_handler(error_handler)
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_url))
-    app.add_handler(CallbackQueryHandler(button_callback))
-    
-    await app.initialize()
-    await app.start()
-    await app.updater.start_polling(allowed_updates=Update.ALL_TYPES)
-    
-    logger.info("Google Drive Bot Started! 🎉")
-    
-    while True:
-        await asyncio.sleep(1)
+    if action == "warn_144":
+        return await query.message.edit_text("⚠️ **Low Quality Warning!**\n📉 144p video may look blurry.\n\n👉 **Continue?**", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("✅ Yes", callback_data=f"144|{unique_id}")], [InlineKeyboardButton("❌ Back", callback_data=f"back|{unique_id}")]]))
 
-async def main():
-    await asyncio.gather(start_web_server(), start_bot())
+    if action == "back":
+        buttons = [
+            [InlineKeyboardButton("🚀 4K (Ultra HD)", callback_data=f"2160|{unique_id}"), InlineKeyboardButton("🌟 2K (1440p)", callback_data=f"1440|{unique_id}")],
+            [InlineKeyboardButton("🖥 1080p (Full HD)", callback_data=f"1080|{unique_id}"), InlineKeyboardButton("💻 720p (HD)", callback_data=f"720|{unique_id}")],
+            [InlineKeyboardButton("📺 480p (Clear)", callback_data=f"480|{unique_id}"), InlineKeyboardButton("📱 360p (Best Mobile)", callback_data=f"360|{unique_id}")],
+            [InlineKeyboardButton("📟 240p", callback_data=f"240|{unique_id}"), InlineKeyboardButton("📉 144p (Data Saver)", callback_data=f"warn_144|{unique_id}")],
+            [InlineKeyboardButton("🎵 Audio Only (MP3)", callback_data=f"mp3|{unique_id}")]
+        ]
+        return await query.message.edit_text(f"🎬 **{meta['title']}**", reply_markup=InlineKeyboardMarkup(buttons))
 
-if __name__ == '__main__':
-    asyncio.run(main())
+    await query.message.delete()
+    status_msg = await query.message.reply_text(f"⏳ **Initializing Download...**")
+    
+    filename = f"vid_{int(time.time())}"
+    
+    # 1. PRIMARY: Android Creator (Requires Nightly - The strongest bypass)
+    opts_primary = {
+        'format': 'bestaudio/best' if action == "mp3" else f'bestvideo[height<={action}]+bestaudio/best[height<={action}]/best',
+        'outtmpl': f"{filename}.%(ext)s",
+        'merge_output_format': 'mp4' if action != 'mp3' else None,
+        'quiet': True,
+        'cookiefile': None, # No cookies to force anonymous
+        'extractor_args': {'youtube': {'player_client': ['android_creator', 'android']}},
+        'writethumbnail': True
+    }
+    if action == 'mp3': opts_primary['postprocessors'] = [{'key': 'FFmpegExtractAudio','preferredcodec': 'mp3'}]
+
+    # 2. FALLBACK: TV (Another strong bypass)
+    opts_fallback = {
+        'format': 'best' if action != 'mp3' else 'bestaudio/best',
+        'outtmpl': f"{filename}.%(ext)s",
+        'quiet': True,
+        'cookiefile': None, 
+        'extractor_args': {'youtube': {'player_client': ['tv', 'web_creator']}}, 
+        'writethumbnail': True
+    }
+    if action == 'mp3': opts_fallback['postprocessors'] = [{'key': 'FFmpegExtractAudio','preferredcodec': 'mp3'}]
+
+    final_file = None
+    local_thumb = f"{filename}.jpg"
+    
+    try:
+        await asyncio.to_thread(lambda: yt_dlp.YoutubeDL(opts_primary).download([meta['url']]))
+    except Exception as e:
+        print(f"⚠️ Primary Failed. Switching to TV Bypass...")
+        try:
+            await asyncio.to_thread(lambda: yt_dlp.YoutubeDL(opts_fallback).download([meta['url']]))
+        except Exception as e2:
+            if query.message.chat.id == LOG_GROUP_ID:
+                return await status_msg.edit_text(f"❌ **Technical Error:**\n`{e2}`")
+            else:
+                return await status_msg.edit_text("⚠️ **Bot is currently down for maintenance.**\n(Server is busy, please try again later.)")
+
+    final_file = f"{filename}.mp3" if action == "mp3" else f"{filename}.mp4"
+    if not os.path.exists(final_file) and action != 'mp3':
+        if os.path.exists(f"{filename}.mkv"): final_file = f"{filename}.mkv"
+        elif os.path.exists(f"{filename}.webm"): final_file = f"{filename}.webm"
+
+    if final_file and os.path.exists(final_file):
+        # STICKER AD (Caption Only)
+        caption = f"✅ **{meta['title']}**\n📍 Quality: {action}\n\n📢 **Ad:** Check out our partner channels!\n\nDownloaded via @VelvetaYTDownloaderBot"
+        
+        donate_btns = InlineKeyboardMarkup([[InlineKeyboardButton("☕ Donate", url="https://buymeacoffee.com/VelvetaBots")]])
+        
+        method = app.send_audio if action == 'mp3' else app.send_video
+        await method(
+            query.message.chat.id, 
+            final_file, 
+            caption=caption, 
+            thumb=local_thumb if os.path.exists(local_thumb) else None,
+            reply_markup=donate_btns,
+            reply_to_message_id=original_msg_id,
+            progress=progress_bar,
+            progress_args=(status_msg, time.time(), meta['title'], "Uploading")
+        )
+        await status_msg.delete()
+    else:
+        if query.message.chat.id == LOG_GROUP_ID: await status_msg.edit_text("❌ Error: File downloaded but not found.")
+        else: await status_msg.edit_text("⚠️ **Bot is currently down for maintenance.**")
+
+    for ext in ["mp4", "mp3", "mkv", "webm", "jpg", "webp"]:
+        f = f"{filename}.{ext}"
+        if os.path.exists(f): os.remove(f)
+
+# --- 8. RUN BOT ---
+if __name__ == "__main__":
+    print("🚀 Bot Starting...")
+    app.run()
+    
