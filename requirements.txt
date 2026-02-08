@@ -1,2 +1,5 @@
-python-telegram-bot==21.0.1
-aiohttp==3.9.1
+flask
+pyrogram
+tgcrypto
+requests
+yt-dlp@https://github.com/yt-dlp/yt-dlp/archive/master.zip
