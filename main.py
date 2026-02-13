@@ -21,8 +21,7 @@ logger = logging.getLogger(__name__)
 # --- 2. CONFIGURATION ---
 API_ID = 11253846                   
 API_HASH = "8db4eb50f557faa9a5756e64fb74a51a" 
-# మీ కొత్త బాట్ టోకెన్ ఇక్కడ ఇవ్వండి
-BOT_TOKEN = "8381012379:AAF5VKvjQmLK5qsEP8PNh4MxESUEvr53P6w"
+BOT_TOKEN = "8560671514:AAGjMGh4oBDgzeM4qwI7V0FVhu46f5uQ8uc"
 
 # LINKS
 CHANNEL_LINK = "https://t.me/Velvetabots"              
@@ -30,18 +29,17 @@ DONATE_LINK = "https://buymeacoffee.com/VelvetaBots"
 SUPPORT_LINK = "https://t.me/Velvetasupport" 
 BOT_USERNAME = "@VelvetaFbDownloaderBot"
 OWNER_ID = 883128927 
-# మీ ఛానల్ ID (బాట్ ఇందులో అడ్మిన్ గా ఉండాలి)
 FORCE_SUB_CHANNEL = -1001840010906 
 
-# --- 3. WEB SERVER (Keep Alive) ---
+# --- 3. WEB SERVER (For JustRunMyApp) ---
 web_app = Flask(__name__)
 
 @web_app.route('/')
 def home():
-    return "✅ Velveta Bot is Online!"
+    return "✅ Velveta Bot is Online on JustRunMyApp!"
 
 def run_web_server():
-    # JustRunMy.app పోర్ట్ ని ఆటోమేటిక్ గా తీసుకుంటుంది
+    # JustRunMyApp usually provides a PORT env var
     port = int(os.environ.get("PORT", 8080))
     web_app.run(host="0.0.0.0", port=port)
 
@@ -55,6 +53,7 @@ app = Client(
     ipv6=False 
 )
 
+# Store pending links (Stateless Logic)
 user_data_store = {} 
 user_pending_links = {}
 
@@ -88,7 +87,7 @@ async def auto_check_subscription(client, warning_msg, user_id, url):
         except Exception:
             pass
 
-# --- 7. PROGRESS BAR ---
+# --- 7. PROGRESS BAR (Animation & Stats) ---
 def humanbytes(size):
     if not size: return ""
     power = 2**10
@@ -105,13 +104,17 @@ async def progress(current, total, message, start_time, status_text):
         diff = now - start_time
         if round(diff % 5.00) == 0 or current == total:
             percentage = current * 100 / total
+            
+            # 🟩🟩🟩⬜⬜ Animation
             filled_blocks = int(percentage / 10)
             bar = "🟩" * filled_blocks + "⬜" * (10 - filled_blocks)
+            
             speed = current / diff if diff > 0 else 0
             
+            # Full Details: Speed, Total Size, Uploaded Size
             text = (
                 f"{status_text}\n"
-                f"{bar} **{round(percentage, 1)}%**\n"
+                f"{bar} **{round(percentage, 1)}%**\n\n"
                 f"⚡ **Speed:** {humanbytes(speed)}/s\n"
                 f"💾 **Size:** {humanbytes(current)} / {humanbytes(total)}"
             )
@@ -189,7 +192,6 @@ async def analyze_link(client, message, url, is_callback=False):
     msg = await client.send_message(chat_id, "🔎 **Analyzing Link...**", reply_to_message_id=reply_id)
 
     try:
-        # JustRunMy.app లో cookies.txt లేకపోతే పర్వాలేదు
         cookie_file = 'cookies.txt' if os.path.exists('cookies.txt') else None
         
         opts_info = {
@@ -201,7 +203,10 @@ async def analyze_link(client, message, url, is_callback=False):
         
         if 'entries' in info or info.get('_type') == 'playlist':
              btn = InlineKeyboardMarkup([[InlineKeyboardButton("🛠️ Message Support", url=SUPPORT_LINK)]])
-             await msg.edit_text("📸 **Album Detected!**\n\nI can only download single Videos! 😅", reply_markup=btn)
+             await msg.edit_text(
+                 "📸 **Album Detected!**\n\nThis post has multiple items. I can only download single Videos! 😅\n\nIf you want further support, please message us! 👇",
+                 reply_markup=btn
+             )
              return
 
         if info.get('is_live'):
@@ -209,11 +214,17 @@ async def analyze_link(client, message, url, is_callback=False):
             return
 
         title = info.get('title', 'Facebook Video')[:60] + "..."
+        
         await msg.delete()
         
-        # Show Menu & Save Data
         sent_menu_msg = await show_quality_menu(client, chat_id, url, title, reply_to_id=reply_id)
-        user_data_store[sent_menu_msg.id] = {'url': url, 'title': title, 'reply_to': reply_id, 'chat_id': chat_id}
+        
+        user_data_store[sent_menu_msg.id] = {
+            'url': url, 
+            'title': title, 
+            'reply_to': reply_id,
+            'chat_id': chat_id 
+        }
 
     except Exception as e:
         await handle_error(msg, str(e))
@@ -221,16 +232,20 @@ async def analyze_link(client, message, url, is_callback=False):
 # --- 11. ERROR HANDLER ---
 async def handle_error(message, error_text):
     error_text = error_text.lower()
-    custom_msg = "⚠️ **Download Failed!**"
+    custom_msg = ""
     
-    if "login" in error_text or "private" in error_text:
-        custom_msg = "🔒 **Private Account!** Access denied."
-    elif "not found" in error_text:
-        custom_msg = "❌ **Content Not Found!**"
+    if "login" in error_text or "account" in error_text or "private" in error_text:
+        custom_msg = "🔒 **Private Account Detected!**\n\nThis video is from a private account. Access denied."
+    elif "unavailable" in error_text or "not found" in error_text:
+        custom_msg = "❌ **Content Not Found!**\n\nLink broken or deleted."
+    else:
+        custom_msg = f"⚠️ **Download Failed!**\n\nReason: Technical Error."
     
     btn = InlineKeyboardMarkup([[InlineKeyboardButton("🛠️ Message Support", url=SUPPORT_LINK)]])
-    try: await message.edit_text(f"{custom_msg}\n\nContact support if needed 👇", reply_markup=btn)
-    except: pass
+    try:
+        await message.edit_text(f"{custom_msg}\n\nIf you want further support, please message us! 👇", reply_markup=btn)
+    except:
+        pass
 
 # --- 12. CALLBACK HANDLER ---
 @app.on_callback_query()
@@ -252,7 +267,21 @@ async def callback_handler(client, query):
             await query.answer("⚠️ Not Joined Yet!", show_alert=True)
         return
 
-    # Session Recovery Logic
+    # --- 144p CONFIRMATION (With Emojis) ---
+    if data == "confirm_144":
+        await query.message.edit_text(
+            "⚠️ **Confirmation Required!**\n\n"
+            "👀 **Note:** 144p quality is very low and might be blurry 😵‍💫.\n"
+            "This is only recommended for saving data 📉.\n\n"
+            "🤔 **Do you want to proceed?**",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("✅ Yes, Sure", callback_data="dl_144")],
+                [InlineKeyboardButton("🔙 Back", callback_data="back_to_menu")]
+            ])
+        )
+        return
+
+    # --- RESTORE DATA IF MISSING ---
     stored_data = user_data_store.get(msg_id)
     if not stored_data:
         try:
@@ -261,21 +290,17 @@ async def callback_handler(client, query):
                 url_candidate = original_msg.text.strip()
                 if "facebook.com" in url_candidate or "fb.watch" in url_candidate:
                     stored_data = {
-                        'url': url_candidate, 'title': "Facebook Video",
-                        'chat_id': query.message.chat.id, 'reply_to': original_msg.id
+                        'url': url_candidate,
+                        'title': "Facebook Video",
+                        'chat_id': query.message.chat.id,
+                        'reply_to': original_msg.id
                     }
                     user_data_store[msg_id] = stored_data
-        except: pass
+        except:
+            pass
 
     if not stored_data:
         await query.answer("❌ Session Expired. Send link again.", show_alert=True)
-        return
-
-    if data == "confirm_144":
-        await query.message.edit_text(
-            "⚠️ **Confirmation Required!**\n\n👀 **Note:** 144p quality is very low.\n🤔 **Do you want to proceed?**",
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("✅ Yes, Sure", callback_data="dl_144"), InlineKeyboardButton("🔙 Back", callback_data="back_to_menu")]])
-        )
         return
 
     if data == "back_to_menu":
@@ -290,6 +315,7 @@ async def callback_handler(client, query):
         
         await query.message.delete()
         status_msg = await client.send_message(chat_id, "⏳ **Initializing Download...**")
+        
         await process_download_final(client, status_msg, url, quality, chat_id, reply_to_id)
 
 # --- 13. FINAL DOWNLOADER ---
@@ -297,13 +323,16 @@ async def process_download_final(client, status_msg, url, quality, chat_id, repl
     try:
         filename_base = f"downloads/fb_{chat_id}_{int(time.time())}"
         cookie_file = 'cookies.txt' if os.path.exists('cookies.txt') else None
-        
-        # Use 'best' to avoid merging errors on generic servers
-        fmt = 'bestaudio/best' if quality == "mp3" else 'best'
+
+        if quality == "mp3":
+            fmt = 'bestaudio/best'
+        else:
+            fmt = 'best' # Single file download
 
         opts = {
             'quiet': True, 'noprogress': True, 'cookiefile': cookie_file,
-            'format': fmt, 'outtmpl': f'{filename_base}.%(ext)s',
+            'format': fmt,
+            'outtmpl': f'{filename_base}.%(ext)s',
             'writethumbnail': True,
             'postprocessors': [{'key': 'FFmpegThumbnailsConvertor', 'format': 'jpg'}],
         }
@@ -315,6 +344,7 @@ async def process_download_final(client, status_msg, url, quality, chat_id, repl
 
         await status_msg.edit_text("⬇️ **Downloading...** ▰▱▱▱")
         start_time = time.time()
+        
         await asyncio.to_thread(run_sync_download, opts, url)
         
         final_path = None
@@ -339,12 +369,14 @@ async def process_download_final(client, status_msg, url, quality, chat_id, repl
         if quality == "mp3":
             await client.send_audio(
                 chat_id, audio=final_path, thumb=thumb_path, caption=caption_text, reply_markup=donate_btn,
-                reply_to_message_id=reply_to_id, progress=progress, progress_args=(status_msg, start_time, "☁️ **Uploading Audio...**")
+                reply_to_message_id=reply_to_id, 
+                progress=progress, progress_args=(status_msg, start_time, "☁️ **Uploading Audio...**")
             )
         else:
             await client.send_video(
                 chat_id, video=final_path, thumb=thumb_path, caption=caption_text, reply_markup=donate_btn,
-                reply_to_message_id=reply_to_id, progress=progress, progress_args=(status_msg, start_time, "☁️ **Uploading Video...**")
+                reply_to_message_id=reply_to_id, 
+                progress=progress, progress_args=(status_msg, start_time, "☁️ **Uploading Video...**")
             )
         
         await status_msg.delete()
@@ -399,4 +431,3 @@ if __name__ == '__main__':
     if not os.path.exists('downloads'): os.makedirs('downloads')
     t = threading.Thread(target=run_web_server); t.daemon = True; t.start()
     print("✅ Bot Started!"); app.run()
-    
